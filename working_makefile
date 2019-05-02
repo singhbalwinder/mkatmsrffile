@@ -1,0 +1,21 @@
+COMPILER = intel
+CASEROOT = $(shell pwd)
+
+CMN_PTH = /compyfs/sing201/e3sm_scratch/SMS.ne30_ne30.FC5AV1C-L.compy_intel.atmsrffile/bld/intel/mvapich2/nodebug/nothreads/mct/
+INCSTR      = -I$(CMN_PTH)/include -I$(NETCDF_PATH)/include
+LIBDIR_PIO  = $(CMN_PTH)/lib/
+LIBDIR_CSM  = $(CMN_PTH)/mct/noesmf/c1a1l1i1o1r1g1w1e1/lib
+
+include $(CASEROOT)/../Macros.make
+
+
+LIBS = -L$(LIBDIR_CSM) -lcsm_share -L$(LIBDIR_PIO) -lpio -lmct -lmpeu -L$(NETCDF_PATH)/lib -lnetcdf -lnetcdff #-L$(LIB_PNETCDF) -lpnetcdf
+
+
+#ALL:
+#	echo $(MPIFC)
+
+mkatmsrffile: mkatmsrffile.F90 
+	$(MPIFC) $(FFLAGS) $(INCSTR) -I../bld/intel/mvapich2/nodebug/nothreads/mct/gptl -I../bld/intel/mvapich2/nodebug/nothreads/mct/include  -I$(CMN_PTH)/gptl -I$(CMN_PTH)/mct/noesmf/c1a1l1i1o1r1g1w1e1/include $< -o $@  $(LIBS) $(LDFLAGS) -L../bld/intel/mvapich2/nodebug/nothreads/mct/lib -lgptl
+
+
