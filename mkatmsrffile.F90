@@ -65,11 +65,18 @@ program mkatmsrffile
   real(r8), pointer :: total_soilw(:,:)
   Character(len=*), parameter :: ConfigFileName="mkatmsrffile.rc"
 
+  !MPI init and other calls to run on multi procs...do not forget to link with -lpmi while compiling
   call mpi_init(ierr)
-
   call mpi_comm_size(MPI_COMM_WORLD, npes, ierr)
   call mpi_comm_rank(MPI_COMM_WORLD, iam, ierr)
+
+  print*,'npes:',npes
+  print*,'iam:',iam
+
+  !init pio
   call pio_init(iam, MPI_COMM_WORLD, npes, 0, 1, pio_rearr_none, iosystem,base=0)
+  !iosystem is initialzed in pio_init call, following I am just printing out one of its member (see cime/src/externals/pio2/src/clib/pio.h for all members)
+  print*,'iosystem%num_iotasks:',iosystem%num_iotasks
   allocate(comps(2), comms(2))
   comps(1)=1
   comps(2)=2
@@ -77,12 +84,13 @@ program mkatmsrffile
   call mpi_comm_dup(MPI_COMM_WORLD,comms(2),ierr)
   call mct_world_init(2, MPI_COMM_WORLD, comms, comps)
   
-
+  !load ConfigFileName to read input file names
   call I90_allLoadF(ConfigFileName,0,MPI_COMM_WORLD,ierr)
 
-  call I90_label('srfFileName:', ierr)
-  call i90_gtoken(srffilename, ierr)
-  call I90_label('atmFileName:', ierr)
+  !reading input file names from the file loaded above using I90_allLoadF
+  call I90_label('srfFileName:', ierr) ! label 'srfFileName:' is being read from "mkatmsrffile.rc" file ...
+  call i90_gtoken(srffilename, ierr)   ! ... and part following this string is stored in srffilename variable ....
+  call I90_label('atmFileName:', ierr) ! ....similarly for rest of the files
   call i90_gtoken(atmfilename, ierr)
   call I90_label('landFileName:', ierr)
   call i90_gtoken(landfilename, ierr)
@@ -90,15 +98,25 @@ program mkatmsrffile
   call i90_gtoken(soilwfilename, ierr)
   call I90_label('outputFileName:', ierr)
   call i90_gtoken(outputfilename, ierr)
-  call i90_release(ierr)
+  call i90_release(ierr) !finish readin file "mkatmsrffile.rc"
 
+  print*,'srffilename   :',trim(adjustl(srffilename))
+  print*,'atmfilename   :',trim(adjustl(atmfilename))
+  print*,'landfilename  :',trim(adjustl(landfilename))
+  print*,'soilwFileName :',trim(adjustl(soilwFileName))
+  print*,'outputFileName:',trim(adjustl(outputFileName))
 
+  ! gsmap_srf, srfnx, srfnxg are the intent-outs (see more detail in the subroutine)
   call openfile_and_initdecomp(iosystem, srffilename, npes, iam, gsmap_srf, srfnx, srfnxg)
+  ! gsmap_atm, atmnx, atmnxg are the intent-outs ()
   call openfile_and_initdecomp(iosystem, atmfilename, npes, iam, gsmap_atm, atmnx, atmnxg)
 
  
+  ! The following routine is reading values for labels ("srf2atmFmapname:" and  "srf2atmFmaptype:") from "mkatmsrffile.rc" file
   call shr_mct_queryConfigFile(MPI_COMM_WORLD, "mkatmsrffile.rc", &
        "srf2atmFmapname:",mapname,"srf2atmFmaptype:",maptype)
+  print*,'mapname:',trim(adjustl(mapname))
+  print*,'maptype:',trim(adjustl(maptype))
     
   call shr_mct_sMatPInitnc(sMatP,gsmap_srf, gsmap_atm, &
        mapname, maptype, MPI_COMM_WORLD)
@@ -136,7 +154,8 @@ program mkatmsrffile
         clen = clen+len_trim(srffields(i))+1
      end if
   end do
-
+  print*,'rlist:',rlist
+  print*,'clen:',clen
 
   call mct_aVect_init(srf_av, rlist=trim(rlist), lsize=srfnx)
   call mct_aVect_zero(srf_av)
@@ -324,12 +343,18 @@ contains
     integer, intent(in) :: npes, iam
     type(mct_gsmap), intent(out) :: gsmap
     integer, intent(out) :: nx, nxg
+
+    !local
     integer, pointer :: gindex(:)
 
 
-
+    !nx is the # of grid points for one proc and nxg is the toal number of grid points
     gindex => get_grid_index(iosystem, filename, npes, iam, nx, nxg)
+    print*,'nx, nxg:',nx, nxg
+    print*,'gindex:',gindex
+    !The following gives a gsmap object which contains info about grid points assigned to each proc
     call mct_gsMap_init( gsMap, gindex, MPI_COMM_WORLD,1 , nx, nxg)
+    print*,'gsmap%start,gsmap%length',gsmap%start,gsmap%length
     deallocate(gindex)
 
 
@@ -338,6 +363,10 @@ contains
 
 
   function get_grid_index(iosystem, filename, npes, iam, nx, nxg) result(gindex)
+    !This function computes nx (# of grid points for each task) and
+    !nxg (total number of grid points)
+    ! It also computes gindex which describes which gris point is for which proc.
+    !
     use pio
     implicit none
     character(len=*), intent(in) :: filename
