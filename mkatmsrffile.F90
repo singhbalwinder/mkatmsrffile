@@ -87,8 +87,7 @@ program mkatmsrffile
   Character(len=*), parameter :: ConfigFileName="mkatmsrffile.rc"
 
   integer :: ncid,varid, ieq
-  real(r8), pointer :: lake_balli(:,:),wetland_balli(:,:),urban_balli(:,:),landmask_balli(:,:),pft_balli(:,:,:)
-  real(r8), pointer :: lake_balli1(:),wetland_balli1(:),urban_balli1(:),landmask_balli1(:)
+  real(r8), pointer :: lake_balli(:,:),wetland_balli(:,:),urban_balli(:,:),landmask_balli(:,:),pft_balli(:,:,:),soilw_balli(:,:,:)
 
   !MPI init and other calls to run on multi procs...do not forget to link with -lpmi while compiling
   call mpi_init(ierr)
@@ -154,8 +153,6 @@ program mkatmsrffile
        mapname, maptype, MPI_COMM_WORLD)
 
 
-  ierr = pio_openfile(iosystem, landFile, pio_iotype_netcdf, landfilename, pio_noclobber)
-
   call check(nf90_open(landfilename, NF90_NOWRITE, ncid))
   
   call check( nf90_inq_dimid(ncid, "lon", dimid) )
@@ -166,18 +163,8 @@ program mkatmsrffile
   call check( nf90_inquire_dimension(ncid, dimid, len = npft) )
 
 
-  !ierr = pio_inq_dimid(landFile, 'lon', dimid)
-  !ierr = pio_inq_dimlen(landfile, dimid, nlon)
-  !ierr = pio_inq_dimid(landFile, 'lat', dimid)
-  !ierr = pio_inq_dimlen(landfile, dimid, nlat)
-  !ierr = pio_inq_dimid(landFile, 'pft', dimid)
-  !ierr = pio_inq_dimlen(landfile, dimid, npft)
-
   call mct_gsmap_OrderedPoints(gsMap_srf, iam, Dof)
 
-  call pio_initdecomp(iosystem, pio_double, (/nlon,nlat/), dof, srf_iodesc)
-
-  deallocate(dof)
 
   !following do loop is just creating rlist variable to init srf_av and atm_av, nothing else
   rlist = ' '
@@ -212,34 +199,20 @@ program mkatmsrffile
   !point lake to that memory, index is 30 here and it is pointing to 
   !srf_av%rattr(30,:), second subscript has a length of srfnx=64800
   lake => srf_av%rattr(index,:)
-  !ierr = pio_inq_varid( landFile, 'PCT_LAKE', vid) 
-  !call pio_read_darray(landFile, vid, srf_iodesc, lake, ierr)
 
   allocate(lake_balli(nlon,nlat))
-  allocate(lake_balli1(nlon*nlat))
-  print*,'sz_lake:',size(lake),size(lake_balli),shape(lake),shape(lake_balli)
   call check(nf90_inq_varid(ncid,'PCT_LAKE',varid))
   call check(nf90_get_var(ncid,varid,lake_balli))
-  lake_balli1(:) = reshape(lake_balli,(/nlon*nlat/))
+  lake(:) = reshape(lake_balli,(/nlon*nlat/))
   
-  !ieq = 0
-  !do i = 1,nlon*nlat
-  !   if(lake_balli1(i) == lake(i)) then
-  !      ieq = ieq + 1
-  !   else
-  !      print*,'STOPPING',lake_balli1(i), lake(i),i
-  !      stop
-  !   endif
-  !enddo
-  !print*,'ieq:', ieq
-  lake(:) = lake_balli1(:)
-  !unit change(?)
   lake = lake * 0.01_r8
 
-
-  ierr = pio_inq_varid( landFile, 'PCT_PFT', vid) 
+  allocate(pft_balli(nlon,nlat,npft))
   call check(nf90_inq_varid(ncid,'PCT_PFT',varid))
+  call check(nf90_get_var(ncid,varid,pft_balli))
+  print*,'spahe(pft_balli):',shape(pft_balli)
   allocate(pft(npft),apft(npft))
+
   !following is reading PCT_PFT array which is dimensioned (npft,nlat,nlon)
   !following loop stores each 2d array (nlat,nlon) in pft(i)%fld, where i goes from
   !1 to npft
@@ -248,62 +221,50 @@ program mkatmsrffile
 
      pft(i)%fld => srf_av%rattr(mct_avect_indexra(srf_av,str(1:5)),:)
      apft(i)%fld => atm_av%rattr(mct_avect_indexra(atm_av,str(1:5)),:)
-
-     call pio_setframe(landFile, vid,int(i,kind=PIO_OFFSET_KIND))
-     call pio_read_darray(landFile, vid, srf_iodesc, pft(i)%fld, ierr)
-     pft(i)%fld = pft(i)%fld * 0.01_r8
+     !pft(i)%fld = pft(i)%fld * 0.01_r8
+     pft(i)%fld = reshape(pft_balli(:,:,i),(/nlon*nlat/)) * 0.01_r8
   end do
-
-  allocate(pft_balli(nlon,nlat,npft))
-  call check(nf90_inq_varid(ncid,'PCT_PFT',varid))
-  call check(nf90_get_var(ncid,varid,pft_balli))
-
 
 
   index = mct_avect_indexra(srf_av,'PCT_WETLAND')
   wetland => srf_av%rattr(index,:)
-  ierr = pio_inq_varid( landFile, 'PCT_WETLAND', vid) 
-  call pio_read_darray(landFile, vid, srf_iodesc, wetland, ierr)
 
   allocate(wetland_balli(nlon,nlat))
-  allocate(wetland_balli1(nlon*nlat))
   call check(nf90_inq_varid(ncid,'PCT_WETLAND',varid))
   call check(nf90_get_var(ncid,varid,wetland_balli))
-  wetland_balli1(:) = reshape(wetland_balli,(/nlon*nlat/))
+  wetland = reshape(wetland_balli,(/nlon*nlat/))
   wetland = wetland * 0.01_r8
-  wetland_balli = wetland_balli * 0.01_r8
+
 
   index = mct_avect_indexra(srf_av,'PCT_URBAN')
   urban => srf_av%rattr(index,:)
-  ierr = pio_inq_varid( landFile, 'PCT_URBAN', vid)   
-  call pio_read_darray(landFile, vid, srf_iodesc, urban, ierr)
 
   allocate(urban_balli(nlon,nlat))
   call check(nf90_inq_varid(ncid,'PCT_URBAN',varid))
   call check(nf90_get_var(ncid,varid,urban_balli))
 
+  urban = reshape(urban_balli,(/nlon*nlat/))
   urban = urban * 0.01_r8
-  urban_balli = urban_balli * 0.01_r8
+
   
-
   allocate(landmask(srfnx))
-  ierr = pio_inq_varid( landFile, 'LANDMASK', vid) 
-  call pio_read_darray(landFile, vid, srf_iodesc, landmask, ierr)
-
   allocate(landmask_balli(nlon,nlat))
   call check(nf90_inq_varid(ncid,'LANDMASK',varid))
   call check(nf90_get_var(ncid,varid,landmask_balli))
+  landmask = reshape(landmask_balli,(/nlon*nlat/))
 
 
-  call pio_closefile(landfile)
   call check(nf90_close ( ncid ))
 
-!  call pio_freedecomp(iosystem, srf_iodesc)
   !open soil file
-  ierr = pio_openfile(iosystem, landFile, pio_iotype_netcdf, soilwfilename, pio_noclobber)
+  call check(nf90_open(soilwfilename, NF90_NOWRITE, ncid))!use a different ncid variable?
 
-!  call pio_initdecomp(iosystem, pio_double, (/nlon,nlat,12/), vdof, srf_iodesc)
-  ierr = pio_inq_varid( landFile, 'SOILW', vid) 
+  allocate(soilw_balli(nlon,nlat,12))!make 12 a variable or read from file??
+  call check(nf90_inq_varid(ncid,'SOILW',varid))
+  call check(nf90_get_var(ncid,varid,soilw_balli))
+  print*,'spahe(soilw_balli):',shape(soilw_balli)
+
+
   allocate(soilw(12),asoilw(12))
   do i=1,12
      str = ' '
@@ -311,13 +272,9 @@ program mkatmsrffile
      soilw(i)%fld => srf_av%rattr(mct_avect_indexra(srf_av,str(1:5)),:)
      asoilw(i)%fld => atm_av%rattr(mct_avect_indexra(atm_av,str(1:5)),:)
 
-     call pio_setframe(landFile, vid,int(i,kind=PIO_OFFSET_KIND))
-     call pio_read_darray(landFile, vid, srf_iodesc, soilw(i)%fld, ierr)
+     soilw(i)%fld = reshape(soilw_balli(:,:,i),(/nlat*nlon/))
   end do
-  call pio_closefile(landfile)
-  call pio_freedecomp(iosystem, srf_iodesc)
 
-  
   do i=1,srfnx
      if(nint(landmask(i)) == 0) then
         lake(i) = 1.0
@@ -483,8 +440,6 @@ contains
     !For single proc runs, nx=nxg=64800
     !This subroutine also fills in iosystem data structure
 
-    use pio
-
     implicit none
     character(len=*), intent(in) :: filename
     type(iosystem_desc_t),intent(inout) :: iosystem
@@ -498,13 +453,10 @@ contains
     integer :: dimid, ierr, add1=0, i, start_offset
     integer :: ncid, varid
     
-    ierr = pio_openfile(iosystem, File, PIO_IOTYPE_NETCDF, filename, PIO_NOCLOBBER)
-
     call check(nf90_open(filename, NF90_NOWRITE, ncid))
 
-    !ierr = pio_inq_dimid(File, 'grid_size', dimid)
+
     call check( nf90_inq_dimid(ncid, "grid_size", dimid) )
-    !ierr = pio_inq_dimlen(File, dimid, nxg)
     call check( nf90_inquire_dimension(ncid, dimid, len = nxg) )
 
     nx = nxg/npes
@@ -521,9 +473,6 @@ contains
        gindex(i)=i+iam*nx+start_offset
     end do
 
-
-
-  call pio_closefile(FILE)
   call check(nf90_close ( ncid ))
   end function get_grid_index
 
