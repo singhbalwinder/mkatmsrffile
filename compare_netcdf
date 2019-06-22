@@ -1,0 +1,7 @@
+#!/bin/csh
+
+module load intel/19.0.3   netcdf/4.6.3
+
+set cprnc_ptah = /compyfs/e3sm_baselines/cprnc/cprnc
+
+$cprnc_ptah -m $1 $2
