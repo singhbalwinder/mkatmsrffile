@@ -8,14 +8,6 @@
 program mkatmsrffile
   use netcdf 
   use mpi, only: MPI_COMM_WORLD
-  use pio, only:iosystem_desc_t,io_desc_t,file_desc_t,var_desc_t, &
-       pio_rearr_none,pio_openfile,pio_iotype_netcdf,pio_noclobber, &
-       pio_inq_dimid,pio_inq_dimlen,pio_double,pio_inq_varid, &
-       PIO_OFFSET_KIND,pio_createfile,pio_def_dim, pio_def_var, &
-       pio_enddef,pio_clobber, pio_createfile, pio_init, &
-       pio_initdecomp,pio_read_darray,pio_setframe,pio_closefile, &
-       pio_freedecomp,pio_write_darray,pio_finalize      
-
   use mct_mod, only:mct_gsmap,mct_SMatP,mct_aVect,mct_aVect_init, &
        mct_avect_indexra,shr_kind_cx,mct_world_init,i90_allloadf,i90_label, &
        i90_gtoken,i90_release,mct_gsmap_orderedpoints, mct_avect_zero, &
@@ -43,8 +35,6 @@ program mkatmsrffile
   type(rptr), pointer :: soilw(:), pft(:), apft(:), asoilw(:)
 
 
-  type(iosystem_desc_t) :: iosystem
-
   type(mct_gsmap) :: gsMap_srf, gsMap_atm
   type(mct_SMatP) :: sMatP
   type(mct_aVect), target :: srf_av, atm_av
@@ -53,7 +43,6 @@ program mkatmsrffile
 
   integer, pointer :: comps(:) ! array with component ids
   integer, pointer :: comms(:) ! array with mpicoms
-  type(io_desc_t) :: atm_iodesc, srf_iodesc
 
   character(len=shr_kind_cl) :: srffilename
   character(len=shr_kind_cl) :: atmfilename
@@ -66,12 +55,10 @@ program mkatmsrffile
   character(len=shr_kind_cl) :: maptype
   
 
-  type(file_desc_t) :: landfile, newfile
   integer, pointer :: dof(:), dof2(:), dof3(:)
   real(r8), pointer :: landmask(:),lake(:), wetland(:), urban(:)
   real(r8), pointer :: alake(:), awetland(:), aurban(:), fraction_landuse(:,:)
   integer :: srfnx, atmnx, srfnxg, atmnxg, dimid, nlat, nlon, i, j, clen, index, dim1, dim2
-  type(var_desc_t) :: vid, vid1, vid2
   
   character(len=*), parameter :: srffields(5) =(/"PCT_LAKE   ",&
                                                  "PCT_WETLAND",&
@@ -86,8 +73,10 @@ program mkatmsrffile
   real(r8), pointer :: total_soilw(:,:)
   Character(len=*), parameter :: ConfigFileName="mkatmsrffile.rc"
 
-  integer :: ncid,varid, ieq
+  integer :: ncid,varid, ieq, varid1,varid2
   real(r8), pointer :: lake_balli(:,:),wetland_balli(:,:),urban_balli(:,:),landmask_balli(:,:),pft_balli(:,:,:),soilw_balli(:,:,:)
+
+
 
   !MPI init and other calls to run on multi procs...do not forget to link with -lpmi while compiling
   call mpi_init(ierr)
@@ -97,12 +86,6 @@ program mkatmsrffile
   print*,'npes:',npes
   print*,'iam:',iam
 
-  !init pio
-  call pio_init(iam, MPI_COMM_WORLD, npes, 0, 1, pio_rearr_none, iosystem,base=0)
-  !iosystem is initialzed in pio_init call, 
-  !following I am just printing out one of its member 
-  !(see cime/src/externals/pio2/src/clib/pio.h for all members or /cime/src/externals/pio1/pio/pio_types.F90)
-  print*,'iosystem%num_iotasks:',iosystem%num_iotasks
   allocate(comps(2), comms(2))
   comps(1)=1
   comps(2)=2
@@ -133,9 +116,9 @@ program mkatmsrffile
   print*,'outputFileName:',trim(adjustl(outputFileName))
 
   ! gsmap_srf, srfnx, srfnxg are the intent-outs (see more detail in the subroutine)
-  call openfile_and_initdecomp(iosystem, srffilename, npes, iam, gsmap_srf, srfnx, srfnxg)
+  call openfile_and_initdecomp(srffilename, npes, iam, gsmap_srf, srfnx, srfnxg)
   ! gsmap_atm, atmnx, atmnxg are the intent-outs ()
-  call openfile_and_initdecomp(iosystem, atmfilename, npes, iam, gsmap_atm, atmnx, atmnxg)
+  call openfile_and_initdecomp(atmfilename, npes, iam, gsmap_atm, atmnx, atmnxg)
 
  
   ! The following routine is reading values for labels ("srf2atmFmapname:" and  "srf2atmFmaptype:") from "mkatmsrffile.rc" file
@@ -364,18 +347,16 @@ program mkatmsrffile
 
   end do
 
-  ierr = pio_createfile(iosystem, newFile, pio_iotype_netcdf, trim(outputfilename), pio_clobber)
+  call check( nf90_create(trim(outputfilename), NF90_CLOBBER, ncid) ) ! NEW NCID VAR?
 
-  ierr = pio_def_dim(newFile, 'ncol', atmnxg, dim1)
-  ierr = pio_def_dim(newFile, 'class',11, dim2)
+  call check( nf90_def_dim(ncid, 'ncol', atmnxg, dim1) )
+  call check( nf90_def_dim(ncid, 'class', 11, dim2) )
+  call check( nf90_def_var(ncid, 'fraction_landuse', NF90_DOUBLE, (/dim1,dim2/), varid1) )
+  call check( nf90_def_dim(ncid,'month',12, dim2))
+  call check( nf90_def_var(ncid,'soilw', NF90_DOUBLE, (/dim1,dim2/), varid2))
 
-  ierr = pio_def_var(newFile, 'fraction_landuse', pio_double, (/dim1,dim2/), vid1) 
-  ierr = pio_def_dim(newFile, 'month',12, dim2)
+  call check( nf90_enddef(ncid) )
 
-  ierr = pio_def_var(newFile, 'soilw', pio_double, (/dim1,dim2/), vid2) 
-
-  ierr = pio_enddef(newFile)
-  
   call mct_gsmap_OrderedPoints(gsMap_atm, iam, Dof)
 
 
@@ -387,19 +368,10 @@ program mkatmsrffile
      end do
   end do
 
-  call pio_initdecomp(iosystem, pio_double, (/atmnxg,11/), dof2(1:11*atmnx-1), atm_iodesc)
+  call check(nf90_put_var(ncid, varid1, fraction_landuse))
+  call check(nf90_put_var(ncid, varid2, total_soilw ))
 
-  call pio_write_darray(newFile, vid1, atm_iodesc, fraction_landuse ,ierr)
-  call pio_freedecomp(newfile, atm_iodesc)
-
-  call pio_initdecomp(iosystem, pio_double, (/atmnxg,12/), dof2, atm_iodesc)
-
-  call pio_write_darray(newFile, vid2, atm_iodesc, total_soilw ,ierr)
-  call pio_freedecomp(newfile, atm_iodesc)
-
-
-  call pio_closefile(newFile)
-  call pio_finalize(iosystem, ierr)
+  call check( nf90_close(ncid) )
 
   deallocate(comps, comms)
   call mpi_finalize(ierr)
@@ -407,8 +379,7 @@ program mkatmsrffile
 
 contains
 
-  subroutine openfile_and_initdecomp(iosystem, filename, npes, iam, gsmap, nx, nxg)
-    type(iosystem_desc_t) :: iosystem
+  subroutine openfile_and_initdecomp(filename, npes, iam, gsmap, nx, nxg)
     character(len=*), intent(in) :: filename
     integer, intent(in) :: npes, iam
     type(mct_gsmap), intent(out) :: gsmap
@@ -420,7 +391,7 @@ contains
 
     !nx is the # of grid points for one proc and nxg is the toal number of grid points
     !For single proc, gindex is an array of 1 to 64800, nx=nxg=64800
-    gindex => get_grid_index(iosystem, filename, npes, iam, nx, nxg)
+    gindex => get_grid_index(filename, npes, iam, nx, nxg)
     print*,'nx, nxg:',nx, nxg
     !print*,'gindex:',gindex
     !The following gives a gsmap object which contains info about grid points assigned to each proc
@@ -433,20 +404,18 @@ contains
   end subroutine openfile_and_initdecomp
 
 
-  function get_grid_index(iosystem, filename, npes, iam, nx, nxg) result(gindex)
+  function get_grid_index(filename, npes, iam, nx, nxg) result(gindex)
     !This function computes nx (# of grid points for each task) and
     !nxg (total number of grid points)
     !It also computes gindex which describes which grids point is for which proc.
     !For single proc runs, nx=nxg=64800
-    !This subroutine also fills in iosystem data structure
+
 
     implicit none
     character(len=*), intent(in) :: filename
-    type(iosystem_desc_t),intent(inout) :: iosystem
     integer, intent(in) :: npes, iam
     integer, intent(out) :: nx, nxg
 
-    type(file_desc_t) :: file
     integer, pointer :: gindex(:)
 
 
