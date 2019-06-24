@@ -1,25 +1,11 @@
-COMPILER = intel
+FC := ifort
+PNETCDF_PATH := $(PNETCDF_HOME)
+NETCDF_PATH := $(NETCDF_HOME)
 
-#(DBG variable: 1 for ON and 0 for OFF)
+EXE := exe_mkatmsrffile
+
+#(DBG FLAS=GS: 1 for ON and 0 for OFF)
 DBG = 1
-
-#from env_build.xml (NINST_VALUE)
-#c1a1l1i1o1r1g1w1e1
-NINST_VALUE = c1a1l1i1o1r1g1w1i1e1
-
-
-#caseroot directory of a model build
-#/compyfs/sing201/e3sm_scratch/SMS.ne30_ne30.FC5AV1C-L.compy_intel.atmsrffile
-CASEROOT = /compyfs/sing201/e3sm_scratch/SMS.ne30_ne30.FC5AV1C-L.compy_intel.2atmsrffile/
-
-#Build directory
-BLDDIR = /compyfs/sing201/e3sm_scratch/SMS.ne30_ne30.FC5AV1C-L.compy_intel.2atmsrffile/bld
-
-#common path to model built libraries
-CMN_PTH = $(BLDDIR)/$(COMPILER)/mvapich2/nodebug/nothreads/mct
-
-#path to CSM
-PTH_CSM = mct/noesmf/$(NINST_VALUE)
 
 #---------------------------
 # USER INPUT ENDS HERE
@@ -27,26 +13,18 @@ PTH_CSM = mct/noesmf/$(NINST_VALUE)
 
 
 #include string
-INCSTR      = -I$(CMN_PTH)/include  -I$(CMN_PTH)/gptl -I$(CMN_PTH)/$(PTH_CSM)/include -I$(NETCDF_ROOT)/include
+INC  = -I$(NETCDF_ROOT)/include
+LIB = -L$(NETCDF_ROOT)/lib -lnetcdf -lnetcdff
 
-#libraries path
-LIBSTR_CMN  = -L$(CMN_PTH)/lib
-LIBSTR_CSM  = -L$(CMN_PTH)/$(PTH_CSM)/lib
-
-include $(CASEROOT)/Macros.make
-FFLAGS = -O2
+FFLAGS += -O2
 ifeq ($(DBG), 1)
-   # FFLAGS is getting its value from Macros.make file above
-	FFLAGS = -g -traceback  -O0 -fpe0 -check  all -check noarg_temp_created -ftrapuv -init=snan
+	FFLAGS += -g -traceback  -O0 -fpe0 -check  all -check noarg_temp_created -ftrapuv -init=snan
 endif
 
 
-LIBS = -lpmi $(LIBSTR_CSM) -lcsm_share $(LIBSTR_CMN) -lpio -lmct -lmpeu -lgptl -L$(NETCDF_ROOT)/lib -lnetcdf -lnetcdff -L$(PNETCDF_PATH)/lib -lpnetcdf
-
-
-mkatmsrffile: mkatmsrffile.F90 
-	$(MPIFC) $(FFLAGS) $(INCSTR)  $< -o $@  $(LIBS)
+$(EXE): mkatmsrffile.F90 
+	$(FC) $(FFLAGS) $(INC)  $< -o $@  $(LIB)
 
 clean:
-	/bin/rm mkatmsrffile
+	/bin/rm $(EXE)
 
