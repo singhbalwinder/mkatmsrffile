@@ -4,14 +4,16 @@ COMPILER = intel
 DBG = 1
 
 #from env_build.xml (NINST_VALUE)
-NINST_VALUE = c1a1l1i1o1r1g1w1e1
+#c1a1l1i1o1r1g1w1e1
+NINST_VALUE = c1a1l1i1o1r1g1w1i1e1
 
 
 #caseroot directory of a model build
-CASEROOT = /compyfs/sing201/e3sm_scratch/SMS.ne30_ne30.FC5AV1C-L.compy_intel.atmsrffile
+#/compyfs/sing201/e3sm_scratch/SMS.ne30_ne30.FC5AV1C-L.compy_intel.atmsrffile
+CASEROOT = /compyfs/sing201/e3sm_scratch/SMS.ne30_ne30.FC5AV1C-L.compy_intel.2atmsrffile/
 
 #Build directory
-BLDDIR = /compyfs/sing201/e3sm_scratch/SMS.ne30_ne30.FC5AV1C-L.compy_intel.atmsrffile/bld
+BLDDIR = /compyfs/sing201/e3sm_scratch/SMS.ne30_ne30.FC5AV1C-L.compy_intel.2atmsrffile/bld
 
 #common path to model built libraries
 CMN_PTH = $(BLDDIR)/$(COMPILER)/mvapich2/nodebug/nothreads/mct
@@ -39,7 +41,7 @@ ifeq ($(DBG), 1)
 endif
 
 
-LIBS = -lpmi $(LIBSTR_CSM) -lcsm_share $(LIBSTR_CMN) -lpio -lmct -lmpeu -lgptl -L$(NETCDF_ROOT)/lib -lnetcdf -lnetcdff 
+LIBS = -lpmi $(LIBSTR_CSM) -lcsm_share $(LIBSTR_CMN) -lpio -lmct -lmpeu -lgptl -L$(NETCDF_ROOT)/lib -lnetcdf -lnetcdff -L$(PNETCDF_PATH)/lib -lpnetcdf
 
 
 mkatmsrffile: mkatmsrffile.F90 

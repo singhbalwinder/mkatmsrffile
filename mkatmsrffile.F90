@@ -73,9 +73,10 @@ program mkatmsrffile
   real(r8), pointer :: total_soilw(:,:)
   Character(len=*), parameter :: ConfigFileName="mkatmsrffile.rc"
 
-  integer :: ncid,varid, ieq, varid1,varid2
+  integer :: ncid,varid, ieq, varid1,varid2,n_a,n_b,n_s
+  integer,pointer :: col(:),row(:)
   real(r8), pointer :: lake_balli(:,:),wetland_balli(:,:),urban_balli(:,:),landmask_balli(:,:),pft_balli(:,:,:),soilw_balli(:,:,:)
-
+  real(r8), pointer :: area_a(:),area_b(:),s(:)
 
 
   !MPI init and other calls to run on multi procs...do not forget to link with -lpmi while compiling
@@ -134,6 +135,39 @@ program mkatmsrffile
   !sMatP has fields which stores above variables...it just stores them
   call shr_mct_sMatPInitnc(sMatP,gsmap_srf, gsmap_atm, &
        mapname, maptype, MPI_COMM_WORLD)
+
+  call check(nf90_open(trim(mapname), NF90_NOWRITE, ncid))
+  call check( nf90_inq_dimid(ncid,"n_a", dimid) )
+  call check( nf90_inquire_dimension(ncid, dimid, len = n_a) )
+  call check( nf90_inq_dimid(ncid,"n_b", dimid) )
+  call check( nf90_inquire_dimension(ncid, dimid, len = n_b) )
+  call check( nf90_inq_dimid(ncid,"n_s", dimid) )
+  call check( nf90_inquire_dimension(ncid, dimid, len = n_s) )
+
+  !allocate and read vars
+  allocate(area_a(n_a))
+  call check(nf90_inq_varid(ncid,'area_a',varid))
+  call check(nf90_get_var(ncid,varid,area_a))
+
+  allocate(area_b(n_b))
+  call check(nf90_inq_varid(ncid,'area_b',varid))
+  call check(nf90_get_var(ncid,varid,area_b))
+
+  allocate(col(n_s))
+  call check(nf90_inq_varid(ncid,'col',varid))
+  call check(nf90_get_var(ncid,varid,col))
+
+  allocate(row(n_s))
+  call check(nf90_inq_varid(ncid,'row',varid))
+  call check(nf90_get_var(ncid,varid,row))
+
+  allocate(s(n_s))
+  call check(nf90_inq_varid(ncid,'S',varid))
+  call check(nf90_get_var(ncid,varid,s))
+
+  call check(nf90_close ( ncid ))
+
+
 
 
   call check(nf90_open(landfilename, NF90_NOWRITE, ncid))
@@ -203,7 +237,8 @@ program mkatmsrffile
      write(str,'(A,i2.2)') 'pft',i
 
      pft(i)%fld => srf_av%rattr(mct_avect_indexra(srf_av,str(1:5)),:)
-     apft(i)%fld => atm_av%rattr(mct_avect_indexra(atm_av,str(1:5)),:)
+     print*,'str:',str(1:5)
+     !apft(i)%fld => atm_av%rattr(mct_avect_indexra(atm_av,str(1:5)),:)
      !pft(i)%fld = pft(i)%fld * 0.01_r8
      pft(i)%fld = reshape(pft_balli(:,:,i),(/nlon*nlat/)) * 0.01_r8
   end do
@@ -245,7 +280,7 @@ program mkatmsrffile
   allocate(soilw_balli(nlon,nlat,12))!make 12 a variable or read from file??
   call check(nf90_inq_varid(ncid,'SOILW',varid))
   call check(nf90_get_var(ncid,varid,soilw_balli))
-  print*,'spahe(soilw_balli):',shape(soilw_balli)
+  print*,'shape(soilw_balli):',shape(soilw_balli)
 
 
   allocate(soilw(12),asoilw(12))
@@ -253,7 +288,7 @@ program mkatmsrffile
      str = ' '
      write(str,'(A,i2.2)') 'slw',i     
      soilw(i)%fld => srf_av%rattr(mct_avect_indexra(srf_av,str(1:5)),:)
-     asoilw(i)%fld => atm_av%rattr(mct_avect_indexra(atm_av,str(1:5)),:)
+     !asoilw(i)%fld => atm_av%rattr(mct_avect_indexra(atm_av,str(1:5)),:)
 
      soilw(i)%fld = reshape(soilw_balli(:,:,i),(/nlat*nlon/))
   end do
@@ -270,37 +305,43 @@ program mkatmsrffile
   end do
   deallocate(landmask)
 
-  !index = mct_avect_indexra(atm_av,'PCT_LAKE')
-  !alake => atm_av%rattr(index,:)
 
-  !I went into the routine and found the following relevant code
-  !for mat mult:
-  !<code start>
-  !do n=1,num_elements
-  !   
-  !   row = sMat%data%iAttr(irow,n)
-  !   col = sMat%data%iAttr(icol,n)
-  !   wgt = sMat%data%rAttr(iwgt,n)
-     
-  !   ! loop over attributes being regridded.
-  !   do m=1,num_indices
-  !      yAV%rAttr(m,row) = yAV%rAttr(m,row) + wgt * xAV%rAttr(m,col)
-  !   end do ! m=1,num_indices
-  !end do ! n=1,num_elements
-  !<code ends>
+  !sanity checks for n_s being equal to atmnx etc.?
+  allocate(alake(n_b))
+  alake(:) = 0.0_r8
+  do i = 1, n_s !change i to longer var name with mult characters?
+     alake(row(i)) =  alake(row(i)) + s(i)*lake(col(i))
+  enddo
+  
+  allocate(awetland(n_b))
+  awetland(:) = 0.0_r8
+  do i = 1, n_s !change i to longer var name with mult characters?
+     awetland(row(i)) =  awetland(row(i)) + s(i)*wetland(col(i))
+  enddo
+  
+  allocate(aurban(n_b))
+  aurban(:) = 0.0_r8
+  do i = 1, n_s !change i to longer var name with mult characters?
+     aurban(row(i)) =  aurban(row(i)) + s(i)*urban(col(i))
+  enddo
+
+  do j = 1, npft
+     allocate(apft(j)%fld(n_b))
+     apft(j)%fld(:) = 0.0_r8
+     do i = 1, n_s !change i to longer var name with mult characters?
+        apft(j)%fld(row(i)) = apft(j)%fld(row(i)) + s(i)*pft(j)%fld(col(i))
+     enddo
+  enddo
+
+  do j = 1, 12 !replace 12 with a var name?
+     allocate(asoilw(j)%fld(n_b))
+     asoilw(j)%fld(:) = 0.0_r8
+     do i = 1, n_s !change i to longer var name with mult characters?
+        asoilw(j)%fld(row(i)) = asoilw(j)%fld(row(i)) + s(i)*soilw(j)%fld(col(i))
+     enddo
+  enddo
 
 
-  call mct_sMat_avMult( srf_av, smatP, atm_av)
-
-  index = mct_avect_indexra(atm_av,'PCT_LAKE')
-  alake => atm_av%rattr(index,:)
-
-
-  index = mct_avect_indexra(atm_av,'PCT_WETLAND')
-  awetland => atm_av%rattr(index,:)
-
-  index = mct_avect_indexra(atm_av,'PCT_URBAN')
-  aurban => atm_av%rattr(index,:)
 
 
 
@@ -321,10 +362,6 @@ program mkatmsrffile
         alake(i) = alake(i) + (1.0_r8 - total_land)
      end if
      
-!     print *,i,fraction, fraction_soilw
-!     if(abs(fraction-1.0_r8) > 0.1_r8) then
-!        print *, i, fraction, alake(i), awetland(i), aurban(i), (apft(j)%fld(i), j=1,npft)
-!     end if
 
      do j=1,12
         total_soilw(i,j) = total_soilw(i,j) + asoilw(j)%fld(i) * fraction_soilw
@@ -356,17 +393,6 @@ program mkatmsrffile
   call check( nf90_def_var(ncid,'soilw', NF90_DOUBLE, (/dim1,dim2/), varid2))
 
   call check( nf90_enddef(ncid) )
-
-  call mct_gsmap_OrderedPoints(gsMap_atm, iam, Dof)
-
-
-
-  allocate(dof2(atmnx*12))
-  do j=1,12
-     do i=1,atmnx
-        dof2(i+(j-1)*atmnx) = dof(i)+(j-1)*atmnxg
-     end do
-  end do
 
   call check(nf90_put_var(ncid, varid1, fraction_landuse))
   call check(nf90_put_var(ncid, varid2, total_soilw ))
