@@ -7,23 +7,14 @@
 
 program mkatmsrffile
   use netcdf 
-  use mpi, only: MPI_COMM_WORLD
-  use mct_mod, only:mct_gsmap,mct_SMatP,mct_aVect,mct_aVect_init, &
-       mct_avect_indexra,shr_kind_cx,mct_world_init,i90_allloadf,i90_label, &
-       i90_gtoken,i90_release,mct_gsmap_orderedpoints, mct_avect_zero, &
-       mct_smat_avmult,mct_gsmap_init
-
-  use shr_mct_mod, only: shr_mct_queryconfigfile, shr_mct_smatpinitnc
-  use shr_kind_mod, only : r8=>shr_kind_r8, shr_kind_cl
 
 
   implicit none
 
   !remove dependence on csm share
-  !integer,parameter :: r8 = selected_real_kind(12) ! 8 byte real
-  !integer,parameter :: shr_kind_cl = 256           ! long char
-  !integer,parameter :: shr_kind_cx = 512           ! extra-long char
-
+  integer,parameter :: r8 = selected_real_kind(12) ! 8 byte real
+  integer,parameter :: shr_kind_cl = 256           ! long char
+  integer,parameter :: shr_kind_cx = 512           ! extra-long char
 
   integer :: ierr, npes, iam, npft
   integer, pointer :: sfcgindex(:), atmgindex(:)
@@ -33,13 +24,6 @@ program mkatmsrffile
   end type rptr
 
   type(rptr), pointer :: soilw(:), pft(:), apft(:), asoilw(:)
-
-
-  type(mct_gsmap) :: gsMap_srf, gsMap_atm
-  type(mct_SMatP) :: sMatP
-  type(mct_aVect), target :: srf_av, atm_av
-
-
 
   integer, pointer :: comps(:) ! array with component ids
   integer, pointer :: comms(:) ! array with mpicoms
@@ -51,8 +35,8 @@ program mkatmsrffile
   character(len=shr_kind_cl) :: landfilename
 
   character(len=shr_kind_cl) :: outputfilename
-  character(len=shr_kind_cx) :: mapname
-  character(len=shr_kind_cl) :: maptype
+  character(len=shr_kind_cx) :: mapname,srf2atmFmapname
+  character(len=shr_kind_cl) :: maptype,srf2atmFmaptype
   
 
   integer, pointer :: dof(:), dof2(:), dof3(:)
@@ -66,7 +50,6 @@ program mkatmsrffile
                                                  "SOILW      ", & 
                                                  "PCT_PFT    "/)
   
-  
   character(len=220) :: rList
   character(len=6) :: str
   real(r8) :: total_land, fraction_soilw
@@ -78,56 +61,25 @@ program mkatmsrffile
   real(r8), pointer :: lake_balli(:,:),wetland_balli(:,:),urban_balli(:,:),landmask_balli(:,:),pft_balli(:,:,:),soilw_balli(:,:,:)
   real(r8), pointer :: area_a(:),area_b(:),s(:)
 
-
-  !MPI init and other calls to run on multi procs...do not forget to link with -lpmi while compiling
-  call mpi_init(ierr)
-  call mpi_comm_size(MPI_COMM_WORLD, npes, ierr)
-  call mpi_comm_rank(MPI_COMM_WORLD, iam, ierr)
-
-  print*,'npes:',npes
-  print*,'iam:',iam
-
-  allocate(comps(2), comms(2))
-  comps(1)=1
-  comps(2)=2
-  call mpi_comm_dup(MPI_COMM_WORLD,comms(1),ierr)
-  call mpi_comm_dup(MPI_COMM_WORLD,comms(2),ierr)
-  call mct_world_init(2, MPI_COMM_WORLD, comms, comps)
   
-  !load ConfigFileName to read input file names
-  call I90_allLoadF(ConfigFileName,0,MPI_COMM_WORLD,ierr)
+  namelist /input/srfFileName,atmFileName,landFileName,soilwFileName,srf2atmFmapname,srf2atmFmaptype,outputFileName 
+  
+  open(1, file = 'nml_atmsrf', status = 'old')
+  read(1,nml=input)
+  close(1)
 
-  !reading input file names from the file loaded above using I90_allLoadF
-  call I90_label('srfFileName:', ierr) ! label 'srfFileName:' is being read from "mkatmsrffile.rc" file ...
-  call i90_gtoken(srffilename, ierr)   ! ... and part following this string is stored in srffilename variable ....
-  call I90_label('atmFileName:', ierr) ! ....similarly for rest of the files
-  call i90_gtoken(atmfilename, ierr)
-  call I90_label('landFileName:', ierr)
-  call i90_gtoken(landfilename, ierr)
-  call I90_label('soilwFileName:', ierr)
-  call i90_gtoken(soilwfilename, ierr)
-  call I90_label('outputFileName:', ierr)
-  call i90_gtoken(outputfilename, ierr)
-  call i90_release(ierr) !finish readin file "mkatmsrffile.rc"
-
-  print*,'srffilename   :',trim(adjustl(srffilename))
-  print*,'atmfilename   :',trim(adjustl(atmfilename))
-  print*,'landfilename  :',trim(adjustl(landfilename))
-  print*,'soilwFileName :',trim(adjustl(soilwFileName))
-  print*,'outputFileName:',trim(adjustl(outputFileName))
+  mapname = trim(adjustl(srf2atmFmapname))
+  maptype = trim(adjustl(srf2atmFmaptype))
 
   ! gsmap_srf, srfnx, srfnxg are the intent-outs (see more detail in the subroutine)
-  call openfile_and_initdecomp(srffilename, npes, iam, gsmap_srf, srfnx, srfnxg)
+  call openfile_and_initdecomp(srffilename, srfnx)
   ! gsmap_atm, atmnx, atmnxg are the intent-outs ()
-  call openfile_and_initdecomp(atmfilename, npes, iam, gsmap_atm, atmnx, atmnxg)
+  call openfile_and_initdecomp(atmfilename, atmnx)
 
  
   ! The following routine is reading values for labels ("srf2atmFmapname:" and  "srf2atmFmaptype:") from "mkatmsrffile.rc" file
-  call shr_mct_queryConfigFile(MPI_COMM_WORLD, "mkatmsrffile.rc", &
-       "srf2atmFmapname:",mapname,"srf2atmFmaptype:",maptype)
-  print*,'mapname:',trim(adjustl(mapname))
-  print*,'maptype:',trim(adjustl(maptype))
-    
+
+      
   ! Frm my reading of the following call:
   !sMatP read area_a(n_a), area_b(n_b),col(n_s),row(n_s) and S(n_s) 
   ! from mapname file. MAY BE gsmap_srf is a source grid here and 
@@ -288,10 +240,6 @@ program mkatmsrffile
      enddo
   enddo
 
-
-
-
-
   fraction_soilw=0.0
 
   allocate(fraction_landuse(atmnx,11))
@@ -333,7 +281,7 @@ program mkatmsrffile
 
   call check( nf90_create(trim(outputfilename), NF90_CLOBBER, ncid) ) ! NEW NCID VAR?
 
-  call check( nf90_def_dim(ncid, 'ncol', atmnxg, dim1) )
+  call check( nf90_def_dim(ncid, 'ncol', atmnx, dim1) )
   call check( nf90_def_dim(ncid, 'class', 11, dim2) )
   call check( nf90_def_var(ncid, 'fraction_landuse', NF90_DOUBLE, (/dim1,dim2/), varid1) )
   call check( nf90_def_dim(ncid,'month',12, dim2))
@@ -346,77 +294,22 @@ program mkatmsrffile
 
   call check( nf90_close(ncid) )
 
-  deallocate(comps, comms)
-  call mpi_finalize(ierr)
-
 
 contains
 
-  subroutine openfile_and_initdecomp(filename, npes, iam, gsmap, nx, nxg)
+  subroutine openfile_and_initdecomp(filename, nx)
     character(len=*), intent(in) :: filename
-    integer, intent(in) :: npes, iam
-    type(mct_gsmap), intent(out) :: gsmap
-    integer, intent(out) :: nx, nxg
+    integer, intent(out) :: nx
 
-    !local
-    integer, pointer :: gindex(:)
+    call check(nf90_open(filename, NF90_NOWRITE, ncid))
 
-
-    !nx is the # of grid points for one proc and nxg is the toal number of grid points
-    !For single proc, gindex is an array of 1 to 64800, nx=nxg=64800
-    gindex => get_grid_index(filename, npes, iam, nx, nxg)
-    print*,'nx, nxg:',nx, nxg
-    !print*,'gindex:',gindex
-    !The following gives a gsmap object which contains info about grid points assigned to each proc
-    call mct_gsMap_init( gsMap, gindex, MPI_COMM_WORLD,1 , nx, nxg)
-    print*,'gsmap%start,gsmap%length',gsmap%start,gsmap%length
-    deallocate(gindex)
-
-
-
+    call check( nf90_inq_dimid(ncid, "grid_size", dimid) )
+    call check( nf90_inquire_dimension(ncid, dimid, len = nx) )
+    call check(nf90_close ( ncid ))
   end subroutine openfile_and_initdecomp
 
 
-  function get_grid_index(filename, npes, iam, nx, nxg) result(gindex)
-    !This function computes nx (# of grid points for each task) and
-    !nxg (total number of grid points)
-    !It also computes gindex which describes which grids point is for which proc.
-    !For single proc runs, nx=nxg=64800
 
-
-    implicit none
-    character(len=*), intent(in) :: filename
-    integer, intent(in) :: npes, iam
-    integer, intent(out) :: nx, nxg
-
-    integer, pointer :: gindex(:)
-
-
-    integer :: dimid, ierr, add1=0, i, start_offset
-    integer :: ncid, varid
-    
-    call check(nf90_open(filename, NF90_NOWRITE, ncid))
-
-
-    call check( nf90_inq_dimid(ncid, "grid_size", dimid) )
-    call check( nf90_inquire_dimension(ncid, dimid, len = nxg) )
-
-    nx = nxg/npes
-
-    if(nx*npes < nxg-(npes-iam-1)) then
-       start_offset = nxg-(npes-iam-1)-(nx*npes)-1
-       add1 = 1
-    else
-       add1 = 0
-       start_offset=0
-    end if
-    allocate(gindex(nx+add1))
-    do i=1,nx+add1
-       gindex(i)=i+iam*nx+start_offset
-    end do
-
-  call check(nf90_close ( ncid ))
-  end function get_grid_index
 
   subroutine check(status)
     integer, intent ( in) :: status
