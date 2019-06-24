@@ -133,8 +133,7 @@ program mkatmsrffile
   ! from mapname file. MAY BE gsmap_srf is a source grid here and 
   ! gsmap_atm is destination
   !sMatP has fields which stores above variables...it just stores them
-  call shr_mct_sMatPInitnc(sMatP,gsmap_srf, gsmap_atm, &
-       mapname, maptype, MPI_COMM_WORLD)
+
 
   call check(nf90_open(trim(mapname), NF90_NOWRITE, ncid))
   call check( nf90_inq_dimid(ncid,"n_a", dimid) )
@@ -180,44 +179,7 @@ program mkatmsrffile
   call check( nf90_inquire_dimension(ncid, dimid, len = npft) )
 
 
-  call mct_gsmap_OrderedPoints(gsMap_srf, iam, Dof)
-
-
-  !following do loop is just creating rlist variable to init srf_av and atm_av, nothing else
-  rlist = ' '
-  clen=1
-  do i=1,npft+15
-     if(i<=npft) then
-        write(str,'(A,i2.2,A)') 'pft',i,':'
-        rlist(clen:clen+5) = str
-        clen=clen+6
-     else if(i<=npft+12) then
-        write(str,'(A,i2.2,A)') 'slw',i-npft,':'
-        rlist(clen:clen+5) = str
-        clen=clen+6
-     else
-        if(i==npft+13) clen=clen-1
-        rlist(clen:clen+len_trim(srffields(i-12-npft))) = ':'//trim(srffields(i-12-npft))
-        clen = clen+len_trim(srffields(i-12-npft))+1
-     end if
-  end do
-  print*,'rlist:',rlist
-  print*,'clen:',clen
-
-  !following routine creates a variable "srf_av%rattr" having size (number of strings in rlist,srfnx)
-  call mct_aVect_init(srf_av, rlist=trim(rlist), lsize=srfnx)
-  !probably zero out everything
-  call mct_aVect_zero(srf_av)
-  call mct_aVect_init(atm_av, rlist=rlist, lsize=atmnx)
-  call mct_aVect_zero(atm_av)
-
-  !Get index of PCT_LAKE in rlist (note: rlist also exists in srf_av array)
-  index = mct_avect_indexra(srf_av,'PCT_LAKE')
-  !point lake to that memory, index is 30 here and it is pointing to 
-  !srf_av%rattr(30,:), second subscript has a length of srfnx=64800
-  lake => srf_av%rattr(index,:)
-
-  allocate(lake_balli(nlon,nlat))
+  allocate(lake_balli(nlon,nlat),lake(nlon*nlat))
   call check(nf90_inq_varid(ncid,'PCT_LAKE',varid))
   call check(nf90_get_var(ncid,varid,lake_balli))
   lake(:) = reshape(lake_balli,(/nlon*nlat/))
@@ -234,30 +196,19 @@ program mkatmsrffile
   !following loop stores each 2d array (nlat,nlon) in pft(i)%fld, where i goes from
   !1 to npft
   do i=1,npft
-     write(str,'(A,i2.2)') 'pft',i
-
-     pft(i)%fld => srf_av%rattr(mct_avect_indexra(srf_av,str(1:5)),:)
-     print*,'str:',str(1:5)
-     !apft(i)%fld => atm_av%rattr(mct_avect_indexra(atm_av,str(1:5)),:)
-     !pft(i)%fld = pft(i)%fld * 0.01_r8
+     allocate(pft(i)%fld(nlon*nlat))
      pft(i)%fld = reshape(pft_balli(:,:,i),(/nlon*nlat/)) * 0.01_r8
   end do
 
 
-  index = mct_avect_indexra(srf_av,'PCT_WETLAND')
-  wetland => srf_av%rattr(index,:)
-
-  allocate(wetland_balli(nlon,nlat))
+  allocate(wetland_balli(nlon,nlat),wetland(nlon*nlat))
   call check(nf90_inq_varid(ncid,'PCT_WETLAND',varid))
   call check(nf90_get_var(ncid,varid,wetland_balli))
   wetland = reshape(wetland_balli,(/nlon*nlat/))
   wetland = wetland * 0.01_r8
 
 
-  index = mct_avect_indexra(srf_av,'PCT_URBAN')
-  urban => srf_av%rattr(index,:)
-
-  allocate(urban_balli(nlon,nlat))
+  allocate(urban_balli(nlon,nlat),urban(nlon*nlat))
   call check(nf90_inq_varid(ncid,'PCT_URBAN',varid))
   call check(nf90_get_var(ncid,varid,urban_balli))
 
@@ -285,11 +236,7 @@ program mkatmsrffile
 
   allocate(soilw(12),asoilw(12))
   do i=1,12
-     str = ' '
-     write(str,'(A,i2.2)') 'slw',i     
-     soilw(i)%fld => srf_av%rattr(mct_avect_indexra(srf_av,str(1:5)),:)
-     !asoilw(i)%fld => atm_av%rattr(mct_avect_indexra(atm_av,str(1:5)),:)
-
+     allocate(soilw(i)%fld(nlat*nlon))
      soilw(i)%fld = reshape(soilw_balli(:,:,i),(/nlat*nlon/))
   end do
 
