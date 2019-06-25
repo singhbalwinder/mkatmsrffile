@@ -46,7 +46,7 @@ program mkatmsrffile
   integer :: i_lp, j_lp, k_lp !loop indices
   integer :: srfnx, atmnx, dimid, nlat, nlon, dim1, dim2, npft, ntime
   integer :: ncid_map, ncid_land, ncid_soil, ncid_out
-  integer :: varid, varid1,varid2,n_a,n_b,n_s, total_grd_pts, irow, icol
+  integer :: varid, varid1,varid2,n_a,n_b,num_elements, total_grd_pts, irow, icol
 
   integer,pointer :: col(:),row(:)
 
@@ -107,18 +107,18 @@ program mkatmsrffile
   endif
 
   call nc_check( nf90_inq_dimid(ncid_map,"n_s", dimid) )
-  call nc_check( nf90_inquire_dimension(ncid_map, dimid, len = n_s) )
+  call nc_check( nf90_inquire_dimension(ncid_map, dimid, len = num_elements) )
 
   !allocate and read map file variables
-  allocate(col(n_s))
+  allocate(col(num_elements))
   call nc_check(nf90_inq_varid(ncid_map,'col',varid))
   call nc_check(nf90_get_var(ncid_map,varid,col))
 
-  allocate(row(n_s))
+  allocate(row(num_elements))
   call nc_check(nf90_inq_varid(ncid_map,'row',varid))
   call nc_check(nf90_get_var(ncid_map,varid,row))
 
-  allocate(wgt(n_s))
+  allocate(wgt(num_elements))
   call nc_check(nf90_inq_varid(ncid_map,'S',varid))
   call nc_check(nf90_get_var(ncid_map,varid,wgt))
 
@@ -139,6 +139,14 @@ program mkatmsrffile
 
   !For reshaping arrays compute total grid points
   total_grd_pts = nlon*nlat
+
+  !Sanitay check
+  if(total_grd_pts .ne. srfnx) then
+     print*,'ERROR: Land file nlat*nlon is not equal to srf grid size dimension (grid_size)'
+     print*,'nlon*nlat=',total_grd_pts,' and srf grid_size=',srfnx
+     print*,'Stopping'
+     stop
+  endif
 
   call nc_check( nf90_inq_dimid(ncid_land, "pft", dimid) )
   call nc_check( nf90_inquire_dimension(ncid_land, dimid, len = npft) )
@@ -162,16 +170,14 @@ program mkatmsrffile
 
   !Deallocate all memory at the end???
   !Storing in a data structure
-  !n_b == atmnx,
-  !srfnx == n_a == total_grd_pts
   do i_lp = 1, npft
-     !Allocate and initialize atm data structure
-     allocate(apft(i_lp)%fld(atmnx))  
-     apft(i_lp)%fld(:) = 0.0_r8
-     
      !Allocate land data structure and store read in values
      allocate(pft(i_lp)%fld(total_grd_pts))     
      pft(i_lp)%fld = reshape(tmp3d(:,:,i_lp),(/total_grd_pts/)) * 0.01_r8
+
+     !Allocate and initialize corresponding atm data structure
+     allocate(apft(i_lp)%fld(atmnx))  
+     apft(i_lp)%fld(:) = 0.0_r8
   end do
 
 
@@ -213,13 +219,13 @@ program mkatmsrffile
 
   allocate(soilw(ntime),asoilw(ntime))
   do i_lp = 1, ntime
-     !Allocate and initialize atm data structure
-     allocate(asoilw(i_lp)%fld(atmnx))
-     asoilw(i_lp)%fld(:) = 0.0_r8
-
      !Allocate land data structure and store read in values
      allocate(soilw(i_lp)%fld(total_grd_pts))
      soilw(i_lp)%fld = reshape(tmp3d(:,:,i_lp),(/total_grd_pts/))
+
+     !Allocate and initialize corresponding atm data structure
+     allocate(asoilw(i_lp)%fld(atmnx))
+     asoilw(i_lp)%fld(:) = 0.0_r8
   end do
   tmp3d(:,:,:)   = huge_real   !Reinitialize tmp3d to inf
 
@@ -239,11 +245,12 @@ program mkatmsrffile
   alake(:)    = 0.0_r8
   awetland(:) = 0.0_r8
   aurban(:)   = 0.0_r8 !why can't it be huge_real???
-  do i_lp = 1, n_s 
+  do i_lp = 1, num_elements 
      irow = row(i_lp)
      icol = col(i_lp)
      rwgt = wgt(i_lp)
 
+     !Following equation is obtained from : cime/src/externals/mct/mct/m_MatAttrVectMul.F90 (line 254, master hash:8f364f4b926)
      alake(irow) =  alake(irow) + rwgt*lake(icol)
      awetland(irow) =  awetland(irow) + rwgt*wetland(icol)
      aurban(irow) =  aurban(irow) + rwgt*urban(icol)
