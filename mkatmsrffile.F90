@@ -6,6 +6,14 @@
 ! Interpolate files needed for cam atmosphere dry deposition to model grid
 !===============================================================================
 
+
+!Few investigations and their results:
+!Q: Why total_soilw has huge values?
+!A: 12th month of soilw var in input file clim_soilw.nc has huge values, which
+!   are then remapped to asoilw and then to total_soilw var
+
+
+
 program mkatmsrffile
   use netcdf, only: nf90_open, nf90_inq_dimid, nf90_inquire_dimension,      &
        nf90_inq_varid, nf90_get_var, nf90_close, NF90_NOWRITE, nf90_create, &
@@ -23,9 +31,9 @@ program mkatmsrffile
   real(r8),parameter :: huge_real = huge(1.0_r8)
 
   
-  !Variables
+  !Variables and pointers
   type rptr
-     real(r8), pointer :: fld(:)
+     real(r8), allocatable :: fld(:)
   end type rptr
 
   type(rptr), pointer :: soilw(:), pft(:), apft(:), asoilw(:)
@@ -35,13 +43,14 @@ program mkatmsrffile
 
   character(len=shr_kind_cx) :: srf2atmFmapname
 
-  integer :: srfnx, atmnx, dimid, nlat, nlon, i, j, dim1, dim2, npft
+  integer :: i_lp, j_lp, k_lp !loop indices
+  integer :: srfnx, atmnx, dimid, nlat, nlon, dim1, dim2, npft, ntime
   integer :: ncid_map, ncid_land, ncid_soil, ncid_out
-  integer :: varid, varid1,varid2,n_a,n_b,n_s, total_grd_pts
+  integer :: varid, varid1,varid2,n_a,n_b,n_s, total_grd_pts, irow, icol
 
   integer,pointer :: col(:),row(:)
 
-  real(r8) :: total_land, fraction_soilw  
+  real(r8) :: total_land, fraction_soilw, rwgt
 
   real(r8), pointer :: landmask(:),lake(:), wetland(:), urban(:)
   real(r8), pointer :: alake(:), awetland(:), aurban(:), fraction_landuse(:,:)
@@ -50,6 +59,10 @@ program mkatmsrffile
   real(r8), pointer :: wgt(:)
 
 
+  !--------------------------------------------------
+  ! READ NAMELIST
+  !--------------------------------------------------
+
   !Read namelist
   namelist /input/srfFileName,atmFileName,landFileName,soilwFileName,srf2atmFmapname,outputFileName 
   
@@ -57,16 +70,42 @@ program mkatmsrffile
   read(1,nml=input)
   close(1)
 
+  !--------------------------------------------------
+  ! READ GRID SIZES
+  !--------------------------------------------------
+
   !Read grid sizes of srf and atm files
   call openfile_and_initdecomp(srffilename, srfnx)
   call openfile_and_initdecomp(atmfilename, atmnx)
+
+  !--------------------------------------------------
+  ! READ MAP FILE
+  !--------------------------------------------------
 
   !Read map file for weights and other parameters required for remapping
   call nc_check(nf90_open(trim(srf2atmFmapname), NF90_NOWRITE, ncid_map))
   call nc_check( nf90_inq_dimid(ncid_map,"n_a", dimid) )
   call nc_check( nf90_inquire_dimension(ncid_map, dimid, len = n_a) )
+
+  !Sanitay check
+  if(n_a .ne. srfnx) then
+     print*,'ERROR: Map dimension (n_a) is not equal to srf grid size dimension (grid_size)'
+     print*,'n_a=',n_a,' and srf grid_size=',srfnx
+     print*,'Stopping'
+     stop
+  endif
+
   call nc_check( nf90_inq_dimid(ncid_map,"n_b", dimid) )
   call nc_check( nf90_inquire_dimension(ncid_map, dimid, len = n_b) )
+
+  !Sanitay check
+  if(n_b .ne. atmnx) then
+     print*,'ERROR: Map dimension (n_b) is not equal to atm grid size dimension (grid_size)'
+     print*,'n_b=',n_b,' and atm grid_size=',atmnx
+     print*,'Stopping'
+     stop
+  endif
+
   call nc_check( nf90_inq_dimid(ncid_map,"n_s", dimid) )
   call nc_check( nf90_inquire_dimension(ncid_map, dimid, len = n_s) )
 
@@ -86,6 +125,10 @@ program mkatmsrffile
   !Close map file
   call nc_check(nf90_close ( ncid_map ))
 
+  !--------------------------------------------------
+  ! READ LAND FILE
+  !--------------------------------------------------
+
   !Read Land file
   call nc_check(nf90_open(landfilename, NF90_NOWRITE, ncid_land))
   
@@ -94,6 +137,7 @@ program mkatmsrffile
   call nc_check( nf90_inq_dimid(ncid_land, "lat", dimid) )
   call nc_check( nf90_inquire_dimension(ncid_land, dimid, len = nlat) )
 
+  !For reshaping arrays compute total grid points
   total_grd_pts = nlon*nlat
 
   call nc_check( nf90_inq_dimid(ncid_land, "pft", dimid) )
@@ -116,11 +160,18 @@ program mkatmsrffile
 
   allocate(pft(npft),apft(npft))
 
-  !deallocate all memory at the end???
+  !Deallocate all memory at the end???
   !Storing in a data structure
-  do i=1,npft
-     allocate(pft(i)%fld(total_grd_pts))
-     pft(i)%fld = reshape(tmp3d(:,:,i),(/total_grd_pts/)) * 0.01_r8
+  !n_b == atmnx,
+  !srfnx == n_a == total_grd_pts
+  do i_lp = 1, npft
+     !Allocate and initialize atm data structure
+     allocate(apft(i_lp)%fld(atmnx))  
+     apft(i_lp)%fld(:) = 0.0_r8
+     
+     !Allocate land data structure and store read in values
+     allocate(pft(i_lp)%fld(total_grd_pts))     
+     pft(i_lp)%fld = reshape(tmp3d(:,:,i_lp),(/total_grd_pts/)) * 0.01_r8
   end do
 
 
@@ -149,96 +200,99 @@ program mkatmsrffile
   call nc_check(nf90_close ( ncid_land ))
 
   !open soil file
-  call nc_check(nf90_open(soilwfilename, NF90_NOWRITE, ncid_soil))!use a different ncid variable?
+  call nc_check(nf90_open(soilwfilename, NF90_NOWRITE, ncid_soil))
+  call nc_check(nf90_inq_dimid(ncid_soil, "time", dimid) )
+  call nc_check(nf90_inquire_dimension(ncid_land, dimid, len = ntime) )
 
-  deallocate(tmp3d)
-  allocate(tmp3d(nlon,nlat,12))!make 12 a variable or read from file??
+  deallocate(tmp3d) !deallocate as shape of tmp3d will change for next read
+
+  allocate(tmp3d(nlon,nlat,ntime))
   call nc_check(nf90_inq_varid(ncid_soil,'SOILW',varid))
   call nc_check(nf90_get_var(ncid_soil,varid,tmp3d))
   call nc_check(nf90_close ( ncid_soil ))
 
+  allocate(soilw(ntime),asoilw(ntime))
+  do i_lp = 1, ntime
+     !Allocate and initialize atm data structure
+     allocate(asoilw(i_lp)%fld(atmnx))
+     asoilw(i_lp)%fld(:) = 0.0_r8
 
-  allocate(soilw(12),asoilw(12))
-  do i=1,12
-     allocate(soilw(i)%fld(nlat*nlon))
-     soilw(i)%fld = reshape(tmp3d(:,:,i),(/total_grd_pts/))
+     !Allocate land data structure and store read in values
+     allocate(soilw(i_lp)%fld(total_grd_pts))
+     soilw(i_lp)%fld = reshape(tmp3d(:,:,i_lp),(/total_grd_pts/))
   end do
   tmp3d(:,:,:)   = huge_real   !Reinitialize tmp3d to inf
 
-  do i=1,srfnx
-     if(nint(landmask(i)) == 0) then
-        lake(i) = 1.0
-        wetland(i) = 0.0
-        urban(i) = 0.0
-        do j=1,12
-           soilw(j)%fld(i) = 0.0
+  do i_lp = 1, srfnx
+     if(nint(landmask(i_lp)) == 0) then
+        lake(i_lp) = 1.0
+        wetland(i_lp) = 0.0
+        urban(i_lp) = 0.0
+        do j_lp=1,ntime
+           soilw(j_lp)%fld(i_lp) = 0.0
         end do
      end if
   end do
   deallocate(landmask)
 
-
-  !sanity nc_checks for n_s being equal to atmnx etc.?
-  allocate(alake(n_b), awetland(n_b), aurban(n_b))
+  allocate(alake(atmnx), awetland(atmnx), aurban(atmnx))
   alake(:)    = 0.0_r8
   awetland(:) = 0.0_r8
   aurban(:)   = 0.0_r8 !why can't it be huge_real???
-  do i = 1, n_s !change i to longer var name with mult characters?
-     alake(row(i)) =  alake(row(i)) + wgt(i)*lake(col(i))
-     awetland(row(i)) =  awetland(row(i)) + wgt(i)*wetland(col(i))
-     aurban(row(i)) =  aurban(row(i)) + wgt(i)*urban(col(i))
-  enddo
-  
-  do j = 1, npft
-     allocate(apft(j)%fld(n_b))
-     apft(j)%fld(:) = 0.0_r8
-     do i = 1, n_s !change i to longer var name with mult characters?
-        apft(j)%fld(row(i)) = apft(j)%fld(row(i)) + wgt(i)*pft(j)%fld(col(i))
+  do i_lp = 1, n_s 
+     irow = row(i_lp)
+     icol = col(i_lp)
+     rwgt = wgt(i_lp)
+
+     alake(irow) =  alake(irow) + rwgt*lake(icol)
+     awetland(irow) =  awetland(irow) + rwgt*wetland(icol)
+     aurban(irow) =  aurban(irow) + rwgt*urban(icol)
+
+     do j_lp = 1, npft
+        apft(j_lp)%fld(irow) = apft(j_lp)%fld(irow) + rwgt*pft(j_lp)%fld(icol)
+     enddo
+
+     do j_lp = 1, ntime 
+        asoilw(j_lp)%fld(irow) = asoilw(j_lp)%fld(irow) + rwgt*soilw(j_lp)%fld(icol)
      enddo
   enddo
 
-  do j = 1, 12 !replace 12 with a var name?
-     allocate(asoilw(j)%fld(n_b))
-     asoilw(j)%fld(:) = 0.0_r8
-     do i = 1, n_s !change i to longer var name with mult characters?
-        asoilw(j)%fld(row(i)) = asoilw(j)%fld(row(i)) + wgt(i)*soilw(j)%fld(col(i))
-     enddo
-  enddo
 
-  fraction_soilw=0.0
+
+  fraction_soilw=0.0_r8
 
   allocate(fraction_landuse(atmnx,11))
-  allocate(total_soilw(atmnx,12))
+  allocate(total_soilw(atmnx,ntime))
 
   fraction_landuse = 0.0_r8
-  do i=1,atmnx
-     total_soilw(i,:)=0.0
-     total_land = (alake(i)+awetland(i)+aurban(i))
-     do j=1,npft
-        total_land=total_land+apft(j)%fld(i)
+  do i_lp=1,atmnx
+     total_soilw(i_lp,:)=0.0
+     total_land = (alake(i_lp)+awetland(i_lp)+aurban(i_lp))
+     do j_lp=1,npft
+        total_land=total_land+apft(j_lp)%fld(i_lp)
      end do
-     fraction_soilw = total_land - (alake(i)+awetland(i))
+     fraction_soilw = total_land - (alake(i_lp)+awetland(i_lp))
      if(total_land < 1.0_r8) then
-        alake(i) = alake(i) + (1.0_r8 - total_land)
+        alake(i_lp) = alake(i_lp) + (1.0_r8 - total_land)
      end if
      
 
-     do j=1,12
-        total_soilw(i,j) = total_soilw(i,j) + asoilw(j)%fld(i) * fraction_soilw
+     do j_lp=1,ntime
+        total_soilw(i_lp,j_lp) = total_soilw(i_lp,j_lp) + asoilw(j_lp)%fld(i_lp) * fraction_soilw
      end do
 
-     fraction_landuse(i,1) = aurban(i)
-     fraction_landuse(i,2) = apft(16)%fld(i) + apft(17)%fld(i)
-     fraction_landuse(i,3) = apft(13)%fld(i) + apft(14)%fld(i) + apft(15)%fld(i)
-     fraction_landuse(i,4) = apft(5)%fld(i) + apft(6)%fld(i) + apft(7)%fld(i)+ apft(8)%fld(i) + apft(9)%fld(i)
-     fraction_landuse(i,5) = apft(2)%fld(i) + apft(3)%fld(i) + apft(4)%fld(i)
-     fraction_landuse(i,6) = awetland(i)
-     fraction_landuse(i,7) = alake(i)
-     fraction_landuse(i,8) = apft(1)%fld(i)
-     fraction_landuse(i,11) = apft(10)%fld(i) + apft(11)%fld(i) + apft(12)%fld(i)
+     fraction_landuse(i_lp,1 ) = aurban(i_lp)
+     fraction_landuse(i_lp,2 ) = apft(16)%fld(i_lp) + apft(17)%fld(i_lp)
+     fraction_landuse(i_lp,3 ) = apft(13)%fld(i_lp) + apft(14)%fld(i_lp) + apft(15)%fld(i_lp)
+     fraction_landuse(i_lp,4 ) = apft(5 )%fld(i_lp) + apft(6 )%fld(i_lp) + apft(7)%fld(i_lp )+ apft(8)%fld(i_lp) + apft(9)%fld(i_lp)
+     fraction_landuse(i_lp,5 ) = apft(2 )%fld(i_lp) + apft(3 )%fld(i_lp) + apft(4)%fld(i_lp )
+     fraction_landuse(i_lp,6 ) = awetland(i_lp)
+     fraction_landuse(i_lp,7 ) = alake(i_lp)
+     fraction_landuse(i_lp,8 ) = apft(1 )%fld(i_lp)
+     fraction_landuse(i_lp,11) = apft(10)%fld(i_lp) + apft(11)%fld(i_lp) + apft(12)%fld(i_lp)
 
-     if(abs(sum(fraction_landuse(i,:)-1._r8)) > 0.001_r8) then
-        fraction_landuse(i,:) = fraction_landuse(i,:)/sum(fraction_landuse(i,:))
+     if(abs(sum(fraction_landuse(i_lp,:)-1._r8)) > 0.001_r8) then
+        fraction_landuse(i_lp,:) = fraction_landuse(i_lp,:)/sum(fraction_landuse(i_lp,:))
      end if
      
 
@@ -249,7 +303,7 @@ program mkatmsrffile
   call nc_check( nf90_def_dim(ncid_out, 'ncol', atmnx, dim1) )
   call nc_check( nf90_def_dim(ncid_out, 'class', 11, dim2) )
   call nc_check( nf90_def_var(ncid_out, 'fraction_landuse', NF90_DOUBLE, (/dim1,dim2/), varid1) )
-  call nc_check( nf90_def_dim(ncid_out,'month',12, dim2))
+  call nc_check( nf90_def_dim(ncid_out,'month',ntime, dim2))
   call nc_check( nf90_def_var(ncid_out,'soilw', NF90_DOUBLE, (/dim1,dim2/), varid2))
 
   call nc_check( nf90_enddef(ncid_out) )
